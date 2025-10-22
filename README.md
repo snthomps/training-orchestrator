@@ -134,4 +134,3 @@ See the full documentation for troubleshooting guides.
 ## License
 
 MIT License - see LICENSE file for details.
-EOF
