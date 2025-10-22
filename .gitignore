@@ -1,0 +1,118 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Checkpoints
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+
+# Kubernetes
+*.kubeconfig
+
+# Docker
+.dockerignore
+
+# CI/CD
+.github/workflows/*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Secrets (do not commit!)
+secrets/
+*.key
+*.pem
+*.crt
+*secret*
+*password*
+
+# Backup files
+*.bak.yaml
+*.backup.yaml
+
+# Generated files
+prometheus-data/
+grafana-data/
+loki-data/
+postgres-data/
+redis-data/test_slack*.py

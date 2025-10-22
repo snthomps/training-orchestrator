@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: training-orchestrator
+  namespace: training
+  labels:
+    app: training-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: training-orchestrator
+  template:
+    metadata:
+      labels:
+        app: training-orchestrator
+    spec:
+      serviceAccountName: training-orchestrator
+      containers:
+      - name: orchestrator
+        image: makeartnomatterwhat/training-orchestrator:latest
+        imagePullPolicy: IfNotPresent
+        envFrom:
+        - configMapRef:
+            name: orchestrator-config
+        - secretRef:
+            name: orchestrator-secrets
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        volumeMounts:
+        - name: checkpoint-storage
+          mountPath: /checkpoints
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: checkpoint-storage
+        persistentVolumeClaim:
+          claimName: training-checkpoints

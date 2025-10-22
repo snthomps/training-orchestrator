@@ -1,0 +1,51 @@
+# Include documentation files
+include README.md
+include QUICKSTART.md
+include ARCHITECTURE.md
+include PROJECT_STRUCTURE.md
+include LICENSE
+include VERSION
+include CHANGELOG.md
+
+# Include configuration files
+include config.yaml
+include .env.example
+include pytest.ini
+
+# Include requirements
+include requirements.txt
+
+# Include Kubernetes manifests
+recursive-include k8s *.yaml
+
+# Include monitoring configs
+include prometheus.yml
+include alerts.yml
+include grafana-dashboard.json
+
+# Include Docker files
+include Dockerfile
+include docker-compose.yml
+
+# Include database init
+include init-db.sql
+
+# Include scripts
+include deploy.sh
+include Makefile
+
+# Include templates
+recursive-include templates *.html
+
+# Include tests
+recursive-include tests *.py
+
+# Exclude unnecessary files
+exclude .gitignore
+exclude .dockerignore
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .DS_Store
+recursive-exclude * *.swp
+recursive-exclude * *.swo
+exclude .env

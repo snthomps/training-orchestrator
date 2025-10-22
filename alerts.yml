@@ -1,0 +1,153 @@
+groups:
+  - name: training_job_alerts
+    interval: 30s
+    rules:
+      # High failure rate
+      - alert: HighJobFailureRate
+        expr: |
+          (
+            sum(rate(training_jobs_failed_total[5m])) 
+            / 
+            sum(rate(training_jobs_total[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          component: orchestrator
+        annotations:
+          summary: "High training job failure rate"
+          description: "More than 50% of training jobs are failing (current: {{ $value | humanizePercentage }})"
+
+      # Job stuck in running state
+      - alert: JobStuckRunning
+        expr: |
+          time() - training_job_started_timestamp > 14400
+        for: 10m
+        labels:
+          severity: warning
+          component: orchestrator
+        annotations:
+          summary: "Training job stuck in running state"
+          description: "Job {{ $labels.job_id }} has been running for more than 4 hours"
+
+      # Excessive retries
+      - alert: ExcessiveJobRetries
+        expr: |
+          training_job_retry_count > 2
+        for: 5m
+        labels:
+          severity: warning
+          component: orchestrator
+        annotations:
+          summary: "Job experiencing excessive retries"
+          description: "Job {{ $labels.job_id }} has retried {{ $value }} times"
+
+      # Orchestrator down
+      - alert: OrchestratorDown
+        expr: |
+          up{job="training-orchestrator"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: orchestrator
+        annotations:
+          summary: "Training orchestrator is down"
+          description: "The orchestrator service has been down for more than 2 minutes"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            container_memory_usage_bytes{pod=~"training-orchestrator.*"}
+            /
+            container_spec_memory_limit_bytes{pod=~"training-orchestrator.*"}
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: orchestrator
+        annotations:
+          summary: "High memory usage in orchestrator"
+          description: "Memory usage is above 90%: {{ $value | humanizePercentage }}"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total{pod=~"training-orchestrator.*"}[5m]) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          component: orchestrator
+        annotations:
+          summary: "High CPU usage in orchestrator"
+          description: "CPU usage is above 90% for 10 minutes"
+
+      # No jobs scheduled
+      - alert: NoJobsScheduled
+        expr: |
+          training_jobs_pending == 0 and training_jobs_running == 0
+        for: 1h
+        labels:
+          severity: info
+          component: orchestrator
+        annotations:
+          summary: "No training jobs are scheduled"
+          description: "There have been no pending or running jobs for 1 hour"
+
+      # Checkpoint storage filling up
+      - alert: CheckpointStorageFilling
+        expr: |
+          (
+            kubelet_volume_stats_used_bytes{persistentvolumeclaim="training-checkpoints"}
+            /
+            kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="training-checkpoints"}
+          ) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Checkpoint storage is filling up"
+          description: "Checkpoint PVC is {{ $value | humanizePercentage }} full"
+
+  - name: notification_alerts
+    interval: 30s
+    rules:
+      # Notification failures
+      - alert: NotificationFailures
+        expr: |
+          rate(notification_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: notifications
+        annotations:
+          summary: "High notification failure rate"
+          description: "Notification failure rate: {{ $value | humanize }} failures/sec"
+
+  - name: database_alerts
+    interval: 30s
+    rules:
+      # Database connection issues
+      - alert: DatabaseConnectionIssues
+        expr: |
+          rate(database_connection_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: database
+        annotations:
+          summary: "Database connection issues detected"
+          description: "Error rate: {{ $value | humanize }} errors/sec"
+
+      # Database slow queries
+      - alert: DatabaseSlowQueries
+        expr: |
+          histogram_quantile(0.95, rate(database_query_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: database
+        annotations:
+          summary: "Database queries are slow"
+          description: "95th percentile query time: {{ $value | humanizeDuration }}"

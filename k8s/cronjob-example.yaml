@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: training-scheduler
+  namespace: training
+spec:
+  schedule: "*/30 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: training-orchestrator
+          restartPolicy: OnFailure
+          containers:
+          - name: scheduler
+            image: makeartnomatterwhat/training-orchestrator:latest
+            command: ["python", "scheduler.py"]
+            envFrom:
+            - configMapRef:
+                name: orchestrator-config
+            - secretRef:
+                name: orchestrator-secrets

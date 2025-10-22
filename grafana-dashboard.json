@@ -1,0 +1,234 @@
+{
+  "dashboard": {
+    "title": "Training Job Orchestrator",
+    "tags": ["ml", "training", "orchestrator"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Job Status Overview",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "training_jobs_pending",
+            "legendFormat": "Pending"
+          },
+          {
+            "expr": "training_jobs_running",
+            "legendFormat": "Running"
+          },
+          {
+            "expr": "training_jobs_completed",
+            "legendFormat": "Completed"
+          },
+          {
+            "expr": "training_jobs_failed",
+            "legendFormat": "Failed"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "orientation": "auto"
+        }
+      },
+      {
+        "id": 2,
+        "title": "Job Success Rate",
+        "type": "gauge",
+        "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "(sum(training_jobs_completed) / (sum(training_jobs_completed) + sum(training_jobs_failed))) * 100",
+            "legendFormat": "Success Rate %"
+          }
+        ],
+        "options": {
+          "min": 0,
+          "max": 100,
+          "thresholds": [
+            {"value": 0, "color": "red"},
+            {"value": 70, "color": "yellow"},
+            {"value": 90, "color": "green"}
+          ]
+        }
+      },
+      {
+        "id": 3,
+        "title": "Jobs Over Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "rate(training_jobs_total[5m])",
+            "legendFormat": "Job Rate"
+          },
+          {
+            "expr": "rate(training_jobs_failed_total[5m])",
+            "legendFormat": "Failure Rate"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Jobs/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Average Job Duration",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, rate(training_jobs_duration_seconds_bucket[5m]))",
+            "legendFormat": "p50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, rate(training_jobs_duration_seconds_bucket[5m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(training_jobs_duration_seconds_bucket[5m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "yaxes": [
+          {"format": "s", "label": "Duration"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 5,
+        "title": "Retry Statistics",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "sum by (job_id) (training_job_retry_count)",
+            "legendFormat": "{{job_id}}"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Retry Count"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Active Jobs",
+        "type": "table",
+        "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "training_job_info",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {
+                "job_id": 0,
+                "job_name": 1,
+                "status": 2,
+                "retry_count": 3,
+                "started_at": 4
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Notification Status",
+        "type": "stat",
+        "gridPos": {"h": 6, "w": 8, "x": 0, "y": 26},
+        "targets": [
+          {
+            "expr": "notification_sent_total{channel='slack'}",
+            "legendFormat": "Slack"
+          },
+          {
+            "expr": "notification_sent_total{channel='email'}",
+            "legendFormat": "Email"
+          },
+          {
+            "expr": "notification_failures_total",
+            "legendFormat": "Failed"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Checkpoint Storage Usage",
+        "type": "gauge",
+        "gridPos": {"h": 6, "w": 8, "x": 8, "y": 26},
+        "targets": [
+          {
+            "expr": "(kubelet_volume_stats_used_bytes{persistentvolumeclaim='training-checkpoints'} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim='training-checkpoints'}) * 100"
+          }
+        ],
+        "options": {
+          "unit": "percent",
+          "thresholds": [
+            {"value": 0, "color": "green"},
+            {"value": 70, "color": "yellow"},
+            {"value": 85, "color": "red"}
+          ]
+        }
+      },
+      {
+        "id": 9,
+        "title": "Orchestrator Resource Usage",
+        "type": "graph",
+        "gridPos": {"h": 6, "w": 8, "x": 16, "y": 26},
+        "targets": [
+          {
+            "expr": "rate(container_cpu_usage_seconds_total{pod=~'training-orchestrator.*'}[5m])",
+            "legendFormat": "CPU"
+          },
+          {
+            "expr": "container_memory_usage_bytes{pod=~'training-orchestrator.*'} / 1024 / 1024",
+            "legendFormat": "Memory (MB)"
+          }
+        ]
+      }
+    ],
+    "refresh": "30s",
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["10s", "30s", "1m", "5m", "15m", "30m"]
+    },
+    "templating": {
+      "list": [
+        {
+          "name": "job_id",
+          "type": "query",
+          "query": "label_values(training_job_info, job_id)",
+          "refresh": 1,
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Job Failures",
+          "datasource": "Prometheus",
+          "expr": "changes(training_jobs_failed[1m]) > 0",
+          "tagKeys": "job_id",
+          "titleFormat": "Job Failed",
+          "textFormat": "{{job_id}}"
+        }
+      ]
+    }
+  }
+}

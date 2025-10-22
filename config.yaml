@@ -1,0 +1,167 @@
+# Training Job Orchestrator Configuration
+
+# Orchestrator Settings
+orchestrator:
+  max_workers: 5
+  default_retry_count: 3
+  retry_backoff_base: 60  # seconds
+  job_timeout: 86400  # 24 hours in seconds
+
+# Kubernetes Settings
+kubernetes:
+  namespace: training
+  service_account: training-orchestrator
+  image_pull_policy: IfNotPresent
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2"
+    limits:
+      memory: "8Gi"
+      cpu: "4"
+      nvidia.com/gpu: "1"
+
+# Storage Settings
+storage:
+  checkpoint_dir: /checkpoints
+  pvc_name: training-checkpoints
+  storage_class: standard
+  size: 100Gi
+
+# Database Settings
+database:
+  host: postgres
+  port: 5432
+  name: training_jobs
+  user: orchestrator
+  # password from environment variable
+  max_connections: 20
+  connection_timeout: 30
+
+# Redis Settings
+redis:
+  host: redis
+  port: 6379
+  db: 0
+  # password from environment variable
+  connection_timeout: 10
+  max_connections: 50
+
+# Notification Settings
+notifications:
+  slack:
+    enabled: true
+    # webhook_url from environment variable
+    username: Training Orchestrator
+    icon_emoji: ":robot_face:"
+    
+  email:
+    enabled: true
+    # smtp settings from environment variables
+    from_name: Training Orchestrator
+    templates_dir: ./templates
+    
+# Monitoring Settings
+monitoring:
+  prometheus:
+    enabled: true
+    port: 9090
+    scrape_interval: 15s
+    
+  grafana:
+    enabled: true
+    port: 3000
+    admin_password: # from environment variable
+    
+  loki:
+    enabled: true
+    port: 3100
+    retention_days: 30
+
+# Logging Settings
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: json
+  output: stdout
+  file:
+    enabled: false
+    path: /var/log/orchestrator/app.log
+    max_size_mb: 100
+    backup_count: 5
+
+# API Settings
+api:
+  host: 0.0.0.0
+  port: 8080
+  cors_origins:
+    - "*"
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+  authentication:
+    enabled: false
+    # jwt_secret from environment variable
+
+# Scheduler Settings
+scheduler:
+  enabled: true
+  timezone: UTC
+  max_job_instances: 3
+  coalesce: true  # Combine multiple pending executions
+  misfire_grace_time: 60  # seconds
+
+# Job Defaults
+job_defaults:
+  max_retries: 3
+  timeout_minutes: 1440  # 24 hours
+  priority: normal
+  checkpoint_frequency: 10  # Save checkpoint every N epochs
+  enable_gpu: false
+  environment:
+    PYTHONUNBUFFERED: "1"
+    TF_CPP_MIN_LOG_LEVEL: "2"
+
+# Security Settings
+security:
+  enable_rbac: true
+  pod_security_policy: restricted
+  network_policies: true
+  secret_encryption: true
+
+# Feature Flags
+features:
+  enable_metrics: true
+  enable_tracing: false
+  enable_profiling: false
+  enable_webhooks: false
+  enable_job_dependencies: true
+  enable_priority_queue: true
+
+# Example Job Definitions
+example_jobs:
+  - name: daily-training
+    image: trainer:latest
+    command:
+      - python
+      - train.py
+      - --epochs
+      - "100"
+    schedule: "0 2 * * *"
+    max_retries: 3
+    checkpoint_path: /checkpoints/daily
+    tags:
+      - production
+      - daily
+    
+  - name: weekly-evaluation
+    image: evaluator:latest
+    command:
+      - python
+      - evaluate.py
+    schedule: "0 0 * * 0"
+    max_retries: 2
+    dependencies:
+      - daily-training
+    tags:
+      - evaluation
+      - weekly
