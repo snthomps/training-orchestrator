@@ -1,17 +1,29 @@
+"""
+Updated Training Job Orchestrator with Database Integration
+"""
 import os
 import time
-import json
 import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from enum import Enum
 import requests
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from aiohttp import web
+from sqlalchemy import and_, text
+
+# Database imports
+try:
+    from database import get_db_context, init_db
+    from models import TrainingJobModel
+    DATABASE_ENABLED = True
+except ImportError:
+    DATABASE_ENABLED = False
+    logging.warning("Database module not available, running in standalone mode")
 
 # Import metrics
 try:
@@ -55,6 +67,24 @@ class TrainingJob:
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
+
+    @classmethod
+    def from_db_model(cls, db_job: 'TrainingJobModel') -> 'TrainingJob':
+        """Create TrainingJob from database model"""
+        return cls(
+            job_id=db_job.job_id,
+            name=db_job.name,
+            image=db_job.image,
+            command=db_job.command,
+            schedule=db_job.schedule,
+            max_retries=db_job.max_retries,
+            retry_count=db_job.retry_count,
+            checkpoint_path=db_job.checkpoint_path,
+            status=JobStatus(db_job.status),
+            started_at=db_job.started_at.isoformat() if db_job.started_at else None,
+            completed_at=db_job.completed_at.isoformat() if db_job.completed_at else None,
+            error_message=db_job.error_message
+        )
 
 
 class NotificationService:
@@ -101,7 +131,6 @@ class NotificationService:
             response.raise_for_status()
             logger.info(f"Slack notification sent for job {job.job_id}")
             
-            # Update metrics
             if METRICS_ENABLED:
                 notification_sent_total.labels(
                     channel='slack',
@@ -111,7 +140,6 @@ class NotificationService:
         except Exception as e:
             logger.error(f"Failed to send Slack notification: {e}")
             
-            # Update metrics
             if METRICS_ENABLED:
                 notification_failures_total.labels(
                     channel='slack',
@@ -170,19 +198,66 @@ class NotificationService:
 
 
 class JobOrchestrator:
-    """Main orchestrator for training jobs"""
+    """Main orchestrator for training jobs with database integration"""
     
     def __init__(self):
         self.jobs: Dict[str, TrainingJob] = {}
         self.notification_service = NotificationService()
         self.k8s_namespace = os.getenv('K8S_NAMESPACE', 'default')
+        self.database_enabled = DATABASE_ENABLED
+    
+    def load_jobs_from_database(self):
+        """Load jobs from database"""
+        if not self.database_enabled:
+            logger.warning("Database not enabled, skipping job load")
+            return
+        
+        try:
+            with get_db_context() as db:
+                # Load all pending and running jobs
+                db_jobs = db.query(TrainingJobModel).filter(
+                    TrainingJobModel.status.in_(['pending', 'running', 'retrying'])
+                ).all()
+                
+                for db_job in db_jobs:
+                    job = TrainingJob.from_db_model(db_job)
+                    self.jobs[job.job_id] = job
+                    logger.info(f"Loaded job {job.job_id} from database: {job.name}")
+                
+        except Exception as e:
+            logger.error(f"Failed to load jobs from database: {e}")
+    
+    def sync_job_to_database(self, job: TrainingJob):
+        """Sync job status to database"""
+        if not self.database_enabled:
+            return
+        
+        try:
+            with get_db_context() as db:
+                db_job = db.query(TrainingJobModel).filter(
+                    TrainingJobModel.job_id == job.job_id
+                ).first()
+                
+                if db_job:
+                    db_job.status = job.status.value
+                    db_job.retry_count = job.retry_count
+                    db_job.error_message = job.error_message
+                    
+                    if job.started_at:
+                        db_job.started_at = datetime.fromisoformat(job.started_at)
+                    if job.completed_at:
+                        db_job.completed_at = datetime.fromisoformat(job.completed_at)
+                    
+                    logger.debug(f"Synced job {job.job_id} to database")
+                
+        except Exception as e:
+            logger.error(f"Failed to sync job {job.job_id} to database: {e}")
     
     def register_job(self, job: TrainingJob):
         """Register a new training job"""
         self.jobs[job.job_id] = job
         logger.info(f"Registered job {job.job_id}: {job.name}")
         
-        # Update metrics
         if METRICS_ENABLED:
             training_jobs_total.labels(
                 job_name=job.name
@@ -192,7 +267,6 @@ class JobOrchestrator:
         """Generate Kubernetes Job manifest"""
         command = job.command.copy()
         
-        # Add checkpoint recovery if available
         if job.checkpoint_path and job.retry_count > 0:
             command.extend(['--resume-from-checkpoint', job.checkpoint_path])
         
@@ -209,7 +283,7 @@ class JobOrchestrator:
                 }
             },
             "spec": {
-                "backoffLimit": 0,  # We handle retries ourselves
+                "backoffLimit": 0,
                 "template": {
                     "metadata": {
                         "labels": {
@@ -261,7 +335,9 @@ class JobOrchestrator:
         job.started_at = datetime.now().isoformat()
         logger.info(f"Starting job {job.job_id}: {job.name}")
         
-        # Update metrics
+        # Sync to database
+        self.sync_job_to_database(job)
+        
         if METRICS_ENABLED:
             training_job_started_timestamp.labels(
                 job_id=job.job_id,
@@ -272,11 +348,8 @@ class JobOrchestrator:
         start_time = time.time()
         
         try:
-            # Create K8s job
             manifest = self.create_k8s_job_manifest(job)
             self._submit_k8s_job(manifest)
-            
-            # Monitor job status
             success = await self._monitor_job(job)
             
             if success:
@@ -284,7 +357,8 @@ class JobOrchestrator:
                 job.completed_at = datetime.now().isoformat()
                 logger.info(f"Job {job.job_id} completed successfully")
                 
-                # Update metrics
+                self.sync_job_to_database(job)
+                
                 if METRICS_ENABLED:
                     duration = time.time() - start_time
                     training_jobs_duration_seconds.labels(
@@ -305,25 +379,26 @@ class JobOrchestrator:
             job.error_message = str(e)
             logger.error(f"Job {job.job_id} failed: {e}")
             
-            # Retry logic
             if job.retry_count < job.max_retries:
                 job.retry_count += 1
                 job.status = JobStatus.RETRYING
                 logger.info(f"Retrying job {job.job_id} (attempt {job.retry_count}/{job.max_retries})")
+                
+                self.sync_job_to_database(job)
                 
                 self.notification_service.notify(
                     job,
                     f"Job failed, retrying (attempt {job.retry_count}/{job.max_retries}): {str(e)}"
                 )
                 
-                # Exponential backoff
                 await asyncio.sleep(min(60 * (2 ** job.retry_count), 3600))
                 return await self.run_job(job)
             else:
                 job.status = JobStatus.FAILED
                 job.completed_at = datetime.now().isoformat()
                 
-                # Update metrics
+                self.sync_job_to_database(job)
+                
                 if METRICS_ENABLED:
                     duration = time.time() - start_time
                     training_jobs_duration_seconds.labels(
@@ -340,16 +415,12 @@ class JobOrchestrator:
     
     def _submit_k8s_job(self, manifest: Dict):
         """Submit job to Kubernetes (mock implementation)"""
-        # In production, use kubernetes Python client
         logger.info(f"Submitting K8s job: {manifest['metadata']['name']}")
-        # kubernetes.client.BatchV1Api().create_namespaced_job(...)
     
     async def _monitor_job(self, job: TrainingJob) -> bool:
         """Monitor job execution (mock implementation)"""
-        # In production, poll K8s API for job status
         logger.info(f"Monitoring job {job.job_id}")
-        await asyncio.sleep(5)  # Simulate job execution
-        # Return True for success, False for failure
+        await asyncio.sleep(5)
         return True
     
     def _get_duration(self, job: TrainingJob) -> str:
@@ -365,16 +436,23 @@ class JobOrchestrator:
         """Main scheduling loop"""
         logger.info("Starting job scheduler")
         
+        # Load jobs from database on startup
+        if self.database_enabled:
+            self.load_jobs_from_database()
+        
         while True:
             try:
+                # Reload jobs from database periodically
+                if self.database_enabled:
+                    self.load_jobs_from_database()
+                
                 # Check each job's schedule
-                for job_id, job in self.jobs.items():
+                for job_id, job in list(self.jobs.items()):
                     if job.status == JobStatus.PENDING:
-                        # In production, use APScheduler or similar
                         logger.info(f"Scheduling job {job_id}")
                         asyncio.create_task(self.run_job(job))
                 
-                await asyncio.sleep(60)  # Check every minute
+                await asyncio.sleep(60)
                 
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
@@ -384,10 +462,23 @@ class JobOrchestrator:
 # Health Check API
 async def health_check(request):
     """Health check endpoint"""
+    orchestrator = request.app['orchestrator']
+    
+    db_connected = False
+    if DATABASE_ENABLED:
+        try:
+            with get_db_context() as db:
+                db.execute(text("SELECT 1"))
+                db_connected = True
+        except:
+            pass
+    
     return web.json_response({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "service": "training-orchestrator"
+        "service": "training-orchestrator",
+        "database_enabled": DATABASE_ENABLED,
+        "database_connected": db_connected
     })
 
 
@@ -418,10 +509,9 @@ async def start_health_server(orchestrator: JobOrchestrator, port: int = 8080):
     app = web.Application()
     app['orchestrator'] = orchestrator
     
-    # Add routes
     app.router.add_get('/health', health_check)
     app.router.add_get('/status', status)
-    app.router.add_get('/', health_check)  # Root also returns health
+    app.router.add_get('/', health_check)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -430,38 +520,45 @@ async def start_health_server(orchestrator: JobOrchestrator, port: int = 8080):
     
     logger.info(f"Health check server started on port {port}")
     
-    # Keep the server running
     while True:
         await asyncio.sleep(3600)
 
 
-# Example usage
 async def main():
+    """Main entry point"""
+    # Initialize database if enabled
+    if DATABASE_ENABLED:
+        logger.info("Initializing database...")
+        init_db()
+    
     orchestrator = JobOrchestrator()
     
-    # Register training jobs
-    job1 = TrainingJob(
-        job_id="train-001",
-        name="resnet50-training",
-        image="gcr.io/my-project/trainer:latest",
-        command=["python", "train.py", "--model", "resnet50"],
-        schedule="0 2 * * *",  # Daily at 2 AM
-        max_retries=3,
-        checkpoint_path="/checkpoints/resnet50"
-    )
-    
-    job2 = TrainingJob(
-        job_id="train-002",
-        name="bert-finetuning",
-        image="gcr.io/my-project/nlp-trainer:latest",
-        command=["python", "finetune.py", "--model", "bert-base"],
-        schedule="0 3 * * *",  # Daily at 3 AM
-        max_retries=2,
-        checkpoint_path="/checkpoints/bert"
-    )
-    
-    orchestrator.register_job(job1)
-    orchestrator.register_job(job2)
+    # If no database, register example jobs (backward compatibility)
+    if not DATABASE_ENABLED:
+        logger.info("Running in standalone mode with example jobs")
+        
+        job1 = TrainingJob(
+            job_id="train-001",
+            name="resnet50-training",
+            image="gcr.io/my-project/trainer:latest",
+            command=["python", "train.py", "--model", "resnet50"],
+            schedule="0 2 * * *",
+            max_retries=3,
+            checkpoint_path="/checkpoints/resnet50"
+        )
+        
+        job2 = TrainingJob(
+            job_id="train-002",
+            name="bert-finetuning",
+            image="gcr.io/my-project/nlp-trainer:latest",
+            command=["python", "finetune.py", "--model", "bert-base"],
+            schedule="0 3 * * *",
+            max_retries=2,
+            checkpoint_path="/checkpoints/bert"
+        )
+        
+        orchestrator.register_job(job1)
+        orchestrator.register_job(job2)
     
     # Start both the health server and job scheduler concurrently
     await asyncio.gather(

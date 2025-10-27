@@ -1,131 +1,119 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: training-postgres
+    environment:
+      POSTGRES_DB: training_orchestrator
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - training-network
+
+  # Redis (for caching and queue management)
+  redis:
+    image: redis:7-alpine
+    container_name: training-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - training-network
+
+  # Training Orchestrator (FastAPI + Scheduler)
   orchestrator:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: training-orchestrator
-    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      K8S_NAMESPACE: training
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL}
-      SMTP_SERVER: ${SMTP_SERVER:-smtp.gmail.com}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SENDER_EMAIL: ${SENDER_EMAIL}
-      SENDER_PASSWORD: ${SENDER_PASSWORD}
-      RECIPIENT_EMAILS: ${RECIPIENT_EMAILS}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      POSTGRES_HOST: postgres
-      POSTGRES_DB: training_jobs
-      POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
-    volumes:
-      - ./checkpoints:/checkpoints
-      - ./logs:/logs
-    depends_on:
-      - redis
-      - postgres
-    networks:
-      - training-network
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/training_orchestrator
+      K8S_NAMESPACE: ${K8S_NAMESPACE:-default}
     ports:
-      - "8080:8080"
+      - "8000:8000"  # FastAPI
+      - "8080:8080"  # Health check
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  redis:
-    image: redis:7-alpine
-    container_name: training-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
     volumes:
-      - redis-data:/data
+      - ./logs:/app/logs
     networks:
       - training-network
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
-  postgres:
-    image: postgres:15-alpine
-    container_name: training-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: training_jobs
-      POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
-    networks:
-      - training-network
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U orchestrator"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
 
+  # Prometheus (Metrics)
   prometheus:
     image: prom/prometheus:latest
     container_name: training-prometheus
-    restart: unless-stopped
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
     networks:
       - training-network
-    ports:
-      - "9090:9090"
 
+  # Grafana (Dashboards)
   grafana:
     image: grafana/grafana:latest
     container_name: training-grafana
-    restart: unless-stopped
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
-      - grafana-data:/var/lib/grafana
-    networks:
-      - training-network
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
     ports:
       - "3000:3000"
     depends_on:
       - prometheus
+    networks:
+      - training-network
 
+  # Loki (Log Aggregation)
   loki:
     image: grafana/loki:latest
     container_name: training-loki
-    restart: unless-stopped
-    command: -config.file=/etc/loki/local-config.yaml
-    volumes:
-      - loki-data:/loki
-    networks:
-      - training-network
     ports:
       - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - training-network
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   training-network:
     driver: bridge
-
-volumes:
-  redis-data:
-  postgres-data:
-  prometheus-data:
-  grafana-data:
-  loki-data:

@@ -1,269 +1,333 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+"""
+FastAPI REST API for Training Job Orchestrator
+"""
+from fastapi import FastAPI, HTTPException, Depends, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from sqlalchemy import func, text
 from typing import List, Optional
-import uvicorn
-from datetime import datetime
+import uuid
 import logging
-from enum import Enum
+from datetime import datetime
 
-# Import our orchestrator
-from orchestrator import JobOrchestrator, TrainingJob, JobStatus
+from database import get_db, init_db, engine
+from models import TrainingJobModel
+from schemas import (
+    JobCreate, JobUpdate, JobResponse, JobListResponse,
+    StatsResponse, HealthResponse, ErrorResponse
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create FastAPI app
 app = FastAPI(
     title="Training Job Orchestrator API",
-    description="API for managing ML training jobs with automatic retry and notifications",
-    version="1.0.0"
+    description="REST API for managing ML training jobs with automated scheduling and failure recovery",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-# Global orchestrator instance
-orchestrator = JobOrchestrator()
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-# Pydantic models
-class JobCreate(BaseModel):
-    name: str
-    image: str
-    command: List[str]
-    schedule: str
-    max_retries: int = 3
-    checkpoint_path: Optional[str] = None
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    logger.info("Initializing database...")
+    init_db()
+    logger.info("Database initialized successfully")
 
 
-class JobResponse(BaseModel):
-    job_id: str
-    name: str
-    status: str
-    retry_count: int
-    max_retries: int
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    error_message: Optional[str]
-
-
-class JobListResponse(BaseModel):
-    jobs: List[JobResponse]
-    total: int
-
-
-# Health check endpoints
-@app.get("/health")
-async def health_check():
-    """Health check endpoint for Kubernetes probes"""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-
-@app.get("/ready")
-async def readiness_check():
-    """Readiness check endpoint"""
+@app.get("/", response_model=HealthResponse)
+async def root(db: Session = Depends(get_db)):
+    """Root endpoint - returns health status"""
     try:
-        # Check if orchestrator is initialized
-        if orchestrator is None:
-            raise Exception("Orchestrator not initialized")
-        return {"status": "ready", "timestamp": datetime.now().isoformat()}
-    except Exception as e:
-        logger.error(f"Readiness check failed: {e}")
-        raise HTTPException(status_code=503, detail="Service not ready")
+        # Test database connection
+        db.execute(text("SELECT 1"))
+        db_connected = True
+    except Exception:
+        db_connected = False
+    
+    return {
+        "status": "healthy" if db_connected else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "service": "training-orchestrator-api",
+        "database_connected": db_connected
+    }
 
 
-# Job management endpoints
-@app.post("/jobs", response_model=JobResponse, status_code=201)
-async def create_job(job: JobCreate, background_tasks: BackgroundTasks):
-    """Create a new training job"""
+@app.get("/health", response_model=HealthResponse)
+async def health_check(db: Session = Depends(get_db)):
+    """Health check endpoint"""
     try:
-        job_id = f"job-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        
-        training_job = TrainingJob(
-            job_id=job_id,
-            name=job.name,
-            image=job.image,
-            command=job.command,
-            schedule=job.schedule,
-            max_retries=job.max_retries,
-            checkpoint_path=job.checkpoint_path
-        )
-        
-        orchestrator.register_job(training_job)
-        
-        # Start job in background
-        background_tasks.add_task(orchestrator.run_job, training_job)
-        
-        logger.info(f"Created job {job_id}")
-        
-        return JobResponse(
-            job_id=training_job.job_id,
-            name=training_job.name,
-            status=training_job.status.value,
-            retry_count=training_job.retry_count,
-            max_retries=training_job.max_retries,
-            started_at=training_job.started_at,
-            completed_at=training_job.completed_at,
-            error_message=training_job.error_message
-        )
+        # Test database connection
+        db.execute(text("SELECT 1"))
+        db_connected = True
     except Exception as e:
-        logger.error(f"Failed to create job: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Database connection failed: {e}")
+        db_connected = False
+    
+    return {
+        "status": "healthy" if db_connected else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "service": "training-orchestrator-api",
+        "database_connected": db_connected
+    }
+
+
+@app.post("/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
+async def create_job(job: JobCreate, db: Session = Depends(get_db)):
+    """
+    Create a new training job
+    
+    - **name**: Unique name for the job
+    - **image**: Docker image to use
+    - **command**: Command to run in the container
+    - **schedule**: Cron expression for scheduling
+    - **max_retries**: Maximum number of retry attempts
+    - **checkpoint_path**: Optional path to checkpoint directory
+    """
+    # Check if job with same name already exists
+    existing_job = db.query(TrainingJobModel).filter(
+        TrainingJobModel.name == job.name
+    ).first()
+    
+    if existing_job:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Job with name '{job.name}' already exists"
+        )
+    
+    # Generate unique job ID
+    job_id = f"train-{uuid.uuid4().hex[:8]}"
+    
+    # Create new job
+    db_job = TrainingJobModel(
+        job_id=job_id,
+        name=job.name,
+        image=job.image,
+        command=job.command,
+        schedule=job.schedule,
+        max_retries=job.max_retries,
+        checkpoint_path=job.checkpoint_path,
+        status="pending"
+    )
+    
+    db.add(db_job)
+    db.commit()
+    db.refresh(db_job)
+    
+    logger.info(f"Created job {job_id}: {job.name}")
+    
+    return db_job.to_dict()
 
 
 @app.get("/jobs", response_model=JobListResponse)
-async def list_jobs(status: Optional[str] = None, limit: int = 100):
-    """List all training jobs with optional status filter"""
-    try:
-        jobs = list(orchestrator.jobs.values())
-        
-        # Filter by status if provided
-        if status:
-            try:
-                status_enum = JobStatus(status.lower())
-                jobs = [j for j in jobs if j.status == status_enum]
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
-        
-        # Apply limit
-        jobs = jobs[:limit]
-        
-        job_responses = [
-            JobResponse(
-                job_id=job.job_id,
-                name=job.name,
-                status=job.status.value,
-                retry_count=job.retry_count,
-                max_retries=job.max_retries,
-                started_at=job.started_at,
-                completed_at=job.completed_at,
-                error_message=job.error_message
-            )
-            for job in jobs
-        ]
-        
-        return JobListResponse(jobs=job_responses, total=len(orchestrator.jobs))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to list jobs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+async def list_jobs(
+    status_filter: Optional[str] = Query(None, description="Filter by status"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db)
+):
+    """
+    List all training jobs with optional filtering and pagination
+    
+    - **status**: Filter by job status (pending, running, completed, failed, retrying)
+    - **page**: Page number (starts at 1)
+    - **page_size**: Number of items per page
+    """
+    query = db.query(TrainingJobModel)
+    
+    # Apply status filter
+    if status_filter:
+        query = query.filter(TrainingJobModel.status == status_filter)
+    
+    # Get total count
+    total = query.count()
+    
+    # Apply pagination
+    offset = (page - 1) * page_size
+    jobs = query.order_by(TrainingJobModel.created_at.desc()).offset(offset).limit(page_size).all()
+    
+    return {
+        "jobs": [job.to_dict() for job in jobs],
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    }
 
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
-async def get_job(job_id: str):
-    """Get details of a specific job"""
-    job = orchestrator.jobs.get(job_id)
+async def get_job(job_id: str, db: Session = Depends(get_db)):
+    """
+    Get details of a specific training job
+    """
+    job = db.query(TrainingJobModel).filter(TrainingJobModel.job_id == job_id).first()
     
     if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
-    return JobResponse(
-        job_id=job.job_id,
-        name=job.name,
-        status=job.status.value,
-        retry_count=job.retry_count,
-        max_retries=job.max_retries,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        error_message=job.error_message
-    )
-
-
-@app.delete("/jobs/{job_id}")
-async def delete_job(job_id: str):
-    """Delete a job"""
-    job = orchestrator.jobs.get(job_id)
-    
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
-    if job.status == JobStatus.RUNNING:
-        raise HTTPException(status_code=400, detail="Cannot delete running job")
-    
-    del orchestrator.jobs[job_id]
-    logger.info(f"Deleted job {job_id}")
-    
-    return {"message": f"Job {job_id} deleted successfully"}
-
-
-@app.post("/jobs/{job_id}/retry")
-async def retry_job(job_id: str, background_tasks: BackgroundTasks):
-    """Manually retry a failed job"""
-    job = orchestrator.jobs.get(job_id)
-    
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
-    if job.status not in [JobStatus.FAILED, JobStatus.COMPLETED]:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Job must be in FAILED or COMPLETED status to retry. Current: {job.status.value}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
         )
     
-    # Reset job state
-    job.status = JobStatus.PENDING
-    job.retry_count = 0
+    return job.to_dict()
+
+
+@app.put("/jobs/{job_id}", response_model=JobResponse)
+async def update_job(job_id: str, job_update: JobUpdate, db: Session = Depends(get_db)):
+    """
+    Update a training job
+    
+    Note: Cannot update jobs that are currently running
+    """
+    job = db.query(TrainingJobModel).filter(TrainingJobModel.job_id == job_id).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
+        )
+    
+    # Prevent updating running jobs
+    if job.status == "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot update a running job"
+        )
+    
+    # Update fields
+    update_data = job_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(job, field, value)
+    
+    db.commit()
+    db.refresh(job)
+    
+    logger.info(f"Updated job {job_id}")
+    
+    return job.to_dict()
+
+
+@app.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(job_id: str, db: Session = Depends(get_db)):
+    """
+    Delete a training job
+    
+    Note: Cannot delete jobs that are currently running
+    """
+    job = db.query(TrainingJobModel).filter(TrainingJobModel.job_id == job_id).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
+        )
+    
+    # Prevent deleting running jobs
+    if job.status == "running":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete a running job"
+        )
+    
+    db.delete(job)
+    db.commit()
+    
+    logger.info(f"Deleted job {job_id}")
+    
+    return None
+
+
+@app.post("/jobs/{job_id}/retry", response_model=JobResponse)
+async def retry_job(job_id: str, db: Session = Depends(get_db)):
+    """
+    Manually retry a failed job
+    
+    Resets the job to pending status and clears error message
+    """
+    job = db.query(TrainingJobModel).filter(TrainingJobModel.job_id == job_id).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found"
+        )
+    
+    # Can only retry failed or completed jobs
+    if job.status not in ["failed", "completed"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Can only retry failed or completed jobs (current status: {job.status})"
+        )
+    
+    # Reset job status
+    job.status = "pending"
     job.error_message = None
     job.started_at = None
     job.completed_at = None
     
-    # Start job in background
-    background_tasks.add_task(orchestrator.run_job, job)
+    db.commit()
+    db.refresh(job)
     
-    logger.info(f"Retrying job {job_id}")
+    logger.info(f"Manually retrying job {job_id}")
     
-    return {"message": f"Job {job_id} queued for retry"}
+    return job.to_dict()
 
 
-@app.get("/stats")
-async def get_stats():
-    """Get overall statistics"""
-    jobs = list(orchestrator.jobs.values())
+@app.get("/stats", response_model=StatsResponse)
+async def get_stats(db: Session = Depends(get_db)):
+    """
+    Get overall statistics about training jobs
+    """
+    total_jobs = db.query(TrainingJobModel).count()
     
-    stats = {
-        "total_jobs": len(jobs),
-        "pending": sum(1 for j in jobs if j.status == JobStatus.PENDING),
-        "running": sum(1 for j in jobs if j.status == JobStatus.RUNNING),
-        "completed": sum(1 for j in jobs if j.status == JobStatus.COMPLETED),
-        "failed": sum(1 for j in jobs if j.status == JobStatus.FAILED),
-        "retrying": sum(1 for j in jobs if j.status == JobStatus.RETRYING),
+    stats = {}
+    for status_value in ["pending", "running", "completed", "failed", "retrying"]:
+        count = db.query(TrainingJobModel).filter(
+            TrainingJobModel.status == status_value
+        ).count()
+        stats[status_value] = count
+    
+    return {
+        "total_jobs": total_jobs,
+        "pending": stats.get("pending", 0),
+        "running": stats.get("running", 0),
+        "completed": stats.get("completed", 0),
+        "failed": stats.get("failed", 0),
+        "retrying": stats.get("retrying", 0)
     }
-    
-    return stats
 
 
-# Metrics endpoint for Prometheus
-@app.get("/metrics")
-async def metrics():
-    """Prometheus metrics endpoint"""
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-    
-    metrics_output = generate_latest()
+# Error handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    """Handle HTTP exceptions"""
     return JSONResponse(
-        content=metrics_output.decode('utf-8'),
-        media_type=CONTENT_TYPE_LATEST
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "error_type": "HTTPException"}
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc):
+    """Handle general exceptions"""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error", "error_type": type(exc).__name__}
     )
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "api:app",
-        host="0.0.0.0",
-        port=8080,
-        reload=True,
-        log_level="info"
-    )
-
-
-def main():
-    """Main entry point for package"""
-    import sys
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.getenv('API_PORT', 8080)),
-        log_level=os.getenv('LOG_LEVEL', 'info').lower()
-    )
-
-
-if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
