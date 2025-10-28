@@ -9,9 +9,10 @@ This guide provides hands-on examples to help you learn how to use your Training
 1. [Your Current Jobs](#your-current-jobs)
 2. [Computer Vision Jobs](#computer-vision-jobs)
 3. [Natural Language Processing Jobs](#nlp-jobs)
-4. [Learning Exercises](#learning-exercises)
-5. [Job Management Examples](#job-management-examples)
-6. [Troubleshooting Examples](#troubleshooting-examples)
+4. [ML Framework Training Jobs](#ml-framework-training-jobs)
+5. [Learning Exercises](#learning-exercises)
+6. [Job Management Examples](#job-management-examples)
+7. [Troubleshooting Examples](#troubleshooting-examples)
 
 ---
 
@@ -242,6 +243,392 @@ curl -X POST http://localhost:8000/jobs \
     "schedule": "0 6 * * *",
     "max_retries": 2,
     "checkpoint_path": "/checkpoints/qa"
+  }'
+```
+
+---
+
+## 🔧 ML Framework Training Jobs
+
+### PyTorch Jobs
+
+#### Example 7: PyTorch Image Classification
+
+**What it does:** Trains a ResNet model using PyTorch with distributed training
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "pytorch-resnet-training",
+    "image": "pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime",
+    "command": [
+      "python", "train_pytorch.py",
+      "--model", "resnet50",
+      "--dataset", "imagenet",
+      "--epochs", "90",
+      "--batch-size", "256",
+      "--lr", "0.1",
+      "--optimizer", "sgd",
+      "--momentum", "0.9",
+      "--weight-decay", "1e-4"
+    ],
+    "schedule": "0 2 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/pytorch-resnet"
+  }'
+```
+
+#### Example 8: PyTorch Distributed Training (Multi-GPU)
+
+**What it does:** Trains a transformer model using PyTorch DDP (DistributedDataParallel)
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "pytorch-ddp-transformer",
+    "image": "pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime",
+    "command": [
+      "torchrun", 
+      "--nproc_per_node=4",
+      "--nnodes=1",
+      "train_distributed.py",
+      "--model", "transformer",
+      "--dataset", "wikitext-103",
+      "--epochs", "20",
+      "--batch-size", "32",
+      "--backend", "nccl"
+    ],
+    "schedule": "0 1 * * 0",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/pytorch-ddp"
+  }'
+```
+
+**Note:** This uses 4 GPUs on a single node
+
+#### Example 9: PyTorch Lightning Training
+
+**What it does:** Trains using PyTorch Lightning for cleaner training loops
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "pytorch-lightning-vae",
+    "image": "pytorchlightning/pytorch_lightning:latest",
+    "command": [
+      "python", "train_lightning.py",
+      "--model", "vae",
+      "--dataset", "celeba",
+      "--max-epochs", "50",
+      "--batch-size", "128",
+      "--gpus", "2",
+      "--precision", "16",
+      "--strategy", "ddp"
+    ],
+    "schedule": "0 3 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/lightning-vae"
+  }'
+```
+
+---
+
+### TensorFlow Jobs
+
+#### Example 10: TensorFlow Keras Model Training
+
+**What it does:** Trains a CNN using TensorFlow/Keras
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "tensorflow-cnn-training",
+    "image": "tensorflow/tensorflow:2.14.0-gpu",
+    "command": [
+      "python", "train_tensorflow.py",
+      "--model", "mobilenet_v2",
+      "--dataset", "cifar10",
+      "--epochs", "100",
+      "--batch-size", "64",
+      "--optimizer", "adam",
+      "--learning-rate", "0.001",
+      "--mixed-precision"
+    ],
+    "schedule": "0 4 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/tf-cnn"
+  }'
+```
+
+#### Example 11: TensorFlow Distributed Training
+
+**What it does:** Multi-GPU training with TensorFlow MirroredStrategy
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "tensorflow-distributed-bert",
+    "image": "tensorflow/tensorflow:2.14.0-gpu",
+    "command": [
+      "python", "train_distributed_tf.py",
+      "--model", "bert-base",
+      "--dataset", "glue/sst2",
+      "--epochs", "5",
+      "--batch-size", "32",
+      "--strategy", "mirrored",
+      "--num-gpus", "4"
+    ],
+    "schedule": "0 0 * * 1",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/tf-bert-distributed"
+  }'
+```
+
+#### Example 12: TensorFlow Custom Training Loop
+
+**What it does:** Advanced custom training with tf.GradientTape
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "tensorflow-custom-gan",
+    "image": "tensorflow/tensorflow:2.14.0-gpu",
+    "command": [
+      "python", "train_gan.py",
+      "--generator", "unet",
+      "--discriminator", "patchgan",
+      "--dataset", "edges2shoes",
+      "--epochs", "200",
+      "--batch-size", "16",
+      "--g-lr", "0.0002",
+      "--d-lr", "0.0002",
+      "--beta1", "0.5"
+    ],
+    "schedule": "0 23 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/tf-gan"
+  }'
+```
+
+---
+
+### JAX Jobs
+
+#### Example 13: JAX Neural Network Training
+
+**What it does:** Trains a neural network using JAX and Flax
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jax-flax-resnet",
+    "image": "gcr.io/my-project/jax-trainer:latest",
+    "command": [
+      "python", "train_jax.py",
+      "--model", "resnet50",
+      "--dataset", "imagenet",
+      "--epochs", "90",
+      "--batch-size", "256",
+      "--learning-rate", "0.1",
+      "--warmup-epochs", "5"
+    ],
+    "schedule": "0 5 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/jax-resnet"
+  }'
+```
+
+#### Example 14: JAX with pmap (Multi-Device Training)
+
+**What it does:** Distributed training across multiple devices using JAX pmap
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jax-pmap-transformer",
+    "image": "gcr.io/my-project/jax-trainer:latest",
+    "command": [
+      "python", "train_jax_pmap.py",
+      "--model", "transformer",
+      "--dataset", "wmt14-en-de",
+      "--epochs", "30",
+      "--batch-size", "64",
+      "--devices", "8",
+      "--optimizer", "adamw",
+      "--lr-schedule", "cosine"
+    ],
+    "schedule": "0 2 * * 0",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/jax-transformer-pmap"
+  }'
+```
+
+**Note:** JAX automatically parallelizes across 8 devices using pmap
+
+#### Example 15: JAX Reinforcement Learning
+
+**What it does:** Trains RL agent using JAX and Haiku
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "jax-ppo-training",
+    "image": "gcr.io/my-project/jax-rl:latest",
+    "command": [
+      "python", "train_ppo.py",
+      "--env", "CartPole-v1",
+      "--algorithm", "ppo",
+      "--num-steps", "1000000",
+      "--num-envs", "16",
+      "--learning-rate", "3e-4",
+      "--clip-eps", "0.2",
+      "--entropy-coef", "0.01"
+    ],
+    "schedule": "0 6 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/jax-ppo"
+  }'
+```
+
+---
+
+### scikit-learn Jobs
+
+#### Example 16: scikit-learn Classification Pipeline
+
+**What it does:** Trains multiple classification models with cross-validation
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sklearn-classification-pipeline",
+    "image": "python:3.11-slim",
+    "command": [
+      "python", "train_sklearn.py",
+      "--task", "classification",
+      "--dataset", "breast-cancer",
+      "--models", "logistic,rf,xgboost,svm",
+      "--cv-folds", "5",
+      "--scale-features",
+      "--feature-selection"
+    ],
+    "schedule": "0 7 * * *",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/sklearn-classification"
+  }'
+```
+
+#### Example 17: scikit-learn Hyperparameter Tuning
+
+**What it does:** Grid search for optimal hyperparameters
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sklearn-grid-search",
+    "image": "python:3.11-slim",
+    "command": [
+      "python", "tune_sklearn.py",
+      "--model", "random-forest",
+      "--dataset", "boston-housing",
+      "--search-type", "grid",
+      "--param-grid", "n_estimators:50,100,200;max_depth:5,10,20",
+      "--cv-folds", "10",
+      "--scoring", "neg_mean_squared_error",
+      "--n-jobs", "-1"
+    ],
+    "schedule": "0 8 * * 0",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/sklearn-gridsearch"
+  }'
+```
+
+**Note:** Runs weekly on Sundays at 8 AM
+
+#### Example 18: scikit-learn Clustering Pipeline
+
+**What it does:** Trains and evaluates clustering models
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sklearn-clustering-analysis",
+    "image": "python:3.11-slim",
+    "command": [
+      "python", "cluster_sklearn.py",
+      "--dataset", "customer-segmentation",
+      "--algorithms", "kmeans,dbscan,hierarchical",
+      "--n-clusters", "5",
+      "--metrics", "silhouette,calinski,davies-bouldin",
+      "--pca-components", "2",
+      "--save-plots"
+    ],
+    "schedule": "0 9 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/sklearn-clustering"
+  }'
+```
+
+#### Example 19: scikit-learn Ensemble Models
+
+**What it does:** Trains stacking and voting ensemble models
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sklearn-ensemble-models",
+    "image": "python:3.11-slim",
+    "command": [
+      "python", "train_ensemble.py",
+      "--base-models", "logistic,rf,xgboost,lightgbm",
+      "--ensemble-type", "stacking",
+      "--meta-learner", "logistic",
+      "--dataset", "credit-default",
+      "--cv-folds", "5",
+      "--calibrate-probabilities"
+    ],
+    "schedule": "0 10 * * *",
+    "max_retries": 2,
+    "checkpoint_path": "/checkpoints/sklearn-ensemble"
+  }'
+```
+
+#### Example 20: scikit-learn Time Series with AutoML
+
+**What it does:** Automated feature engineering and model selection for time series
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "sklearn-timeseries-automl",
+    "image": "python:3.11-slim",
+    "command": [
+      "python", "train_timeseries.py",
+      "--dataset", "stock-prices",
+      "--target", "close_price",
+      "--lag-features", "7,14,30",
+      "--rolling-windows", "7,30,90",
+      "--models", "lasso,ridge,rf,xgboost",
+      "--auto-feature-engineering",
+      "--test-size", "0.2"
+    ],
+    "schedule": "0 11 * * *",
+    "max_retries": 3,
+    "checkpoint_path": "/checkpoints/sklearn-timeseries"
   }'
 ```
 
